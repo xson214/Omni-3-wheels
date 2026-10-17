@@ -1,0 +1,13 @@
+# Python
+streamlit_app/.venv/
+__pycache__/
+*.pyc
+
+# PlatformIO
+firmware/.pio/
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
