@@ -1,11 +1,11 @@
-# Xe Omni 3 bánh — Full stack (ESP32-S3 + Streamlit)
+# Xe Omni 3 bánh — ESP32-S3 + Streamlit
 
-| Thành phần | Thư mục |
+| Thành phần | Nội dung |
 |---|---|
-| Firmware PlatformIO | [`firmware/`](firmware/) |
-| UI Streamlit | [`streamlit_app/`](streamlit_app/) |
-| Đặc tả động học / PID | [`README_FIRMWARE.md`](README_FIRMWARE.md) |
-| Pin map nguồn | [`README_Xe_3_Banh_Omni_ESP32S3.md`](README_Xe_3_Banh_Omni_ESP32S3.md) §2 |
-| Giao tiếp WiFi | [`idea.json`](idea.json) |
+| [Firmware PlatformIO](firmware/) | Điều khiển ba bánh, đọc encoder và bám quỹ đạo |
+| [Ứng dụng Streamlit](streamlit_app/) | Điều khiển MANUAL, tải quỹ đạo và xem telemetry |
+| [Đặc tả firmware](README_FIRMWARE.md) | Động học, PID, watchdog và lệnh Serial |
+| [Sơ đồ chân và hiệu chuẩn encoder](README_Xe_3_Banh_Omni_ESP32S3.md) | Đấu dây ESP32-S3 và đo số tick trên xe |
+| [Giao thức Wi-Fi](idea.json) | Cấu trúc thông điệp HTTP và WebSocket |
 
-Hướng dẫn nạp firmware, SoftAP và chạy Streamlit: [`streamlit_app/README.md`](streamlit_app/README.md).
+Xem [hướng dẫn nạp firmware và chạy Streamlit](streamlit_app/README.md). Hệ số encoder mặc định cần được xác nhận bằng phép đo trước khi chạy bám điểm.

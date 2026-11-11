@@ -1,7 +1,7 @@
 {
     "project": {
-      "name": "Autonomous RC Car",
-      "description": "ESP32-based autonomous car controlled and monitored through a Streamlit web interface.",
+      "name": "OmniCar",
+      "description": "ESP32-S3 three-wheel omni robot controlled and monitored through Streamlit.",
       "communication": {
         "network": "WiFi",
         "protocols": {
@@ -16,15 +16,14 @@
           "http_rest": {
             "purpose": [
               "upload trajectory",
-              "send configuration",
-              "send non-real-time commands"
+              "retrieve stored trajectory",
+              "check HTTP connectivity"
             ],
-            "direction": "Streamlit -> ESP32"
+            "direction": "bidirectional"
           }
         }
       }
     },
-  
     "streamlit": {
       "role": [
         "user interface",
@@ -33,10 +32,9 @@
         "trajectory upload",
         "vehicle monitoring"
       ],
-  
       "modes": {
         "manual": {
-          "description": "Control the car like an RC car using a virtual joystick.",
+          "description": "Select MANUAL, send START, then hold and drag the control pad. Release sends zero.",
           "communication": "WebSocket",
           "data": {
             "type": "joystick",
@@ -44,51 +42,55 @@
             "y": "float [-1.0, 1.0]"
           }
         },
-  
         "autonomous": {
           "description": "Create and upload a trajectory, then let ESP32 execute it.",
-          "communication": "HTTP REST",
+          "communication": "HTTP REST for upload, WebSocket for commands and telemetry",
           "workflow": [
             "Create trajectory",
             "Upload trajectory",
             "ESP32 validates and stores trajectory",
+            "Select AUTO",
             "Send START command",
             "ESP32 executes trajectory autonomously"
           ]
         },
-  
         "stop": {
-          "description": "Immediately stop the vehicle.",
+          "description": "Set PWM to zero and enter STOP/IDLE. Select a mode and send START for a new WebSocket run.",
           "communication": "WebSocket",
           "command": "STOP"
         }
       },
-  
       "trajectory": {
         "format": {
           "type": "trajectory",
           "points": [
             {
-              "x": 0.0,
-              "y": 0.0
+              "x": 0,
+              "y": 0
             },
             {
               "x": 0.5,
-              "y": 0.0
+              "y": 0
             },
             {
-              "x": 1.0,
+              "x": 1,
               "y": 0.5
             }
           ]
+        },
+        "limits": {
+          "points_min": 1,
+          "points_max": 64,
+          "coordinate_min_m": -1000,
+          "coordinate_max_m": 1000,
+          "reference_frame": "Odometry frame initialized at boot"
         }
       }
     },
-  
     "esp32": {
       "role": [
         "WiFi communication",
-        "WebSocket client/server",
+        "WebSocket server",
         "trajectory storage",
         "path following",
         "PID control",
@@ -96,20 +98,18 @@
         "encoder reading",
         "safety control"
       ],
-  
       "control_modes": {
         "MANUAL": {
-          "input": "WebSocket joystick data",
+          "input": "WebSocket joystick data after selecting MANUAL and sending START",
           "processing": [
-            "convert joystick x/y to left/right wheel velocity",
+            "convert joystick x/y to body-frame vx/vy, with zero yaw rate, then compute three wheel speeds",
             "apply speed limits",
             "apply PID control",
             "control motors"
           ]
         },
-  
         "AUTO": {
-          "input": "uploaded trajectory",
+          "input": "Uploaded trajectory after selecting AUTO and sending START",
           "processing": [
             "read current position",
             "calculate target point",
@@ -119,22 +119,22 @@
             "control motors"
           ]
         },
-  
         "STOP": {
           "processing": [
             "set target motor speed to zero",
-            "stop vehicle"
+            "stop vehicle",
+            "require a new mode selection and START before a new WebSocket run"
           ]
         }
       },
-  
       "safety": {
         "websocket_timeout_ms": 300,
         "action_on_timeout": "STOP_MOTOR",
-        "description": "If joystick control is active and communication is lost for longer than the timeout, the ESP32 must stop the motors."
+        "description": "While a nonzero MANUAL joystick command is active, stop and disarm if no joystick message arrives for 300 ms.",
+        "serial_command_timeout_ms": 200,
+        "serial_description": "V, B and P must be refreshed within the timeout to keep moving."
       }
     },
-  
     "websocket": {
       "message_types": {
         "joystick": {
@@ -145,15 +145,18 @@
             "y": 0.8
           }
         },
-  
         "mode": {
           "direction": "Streamlit -> ESP32",
           "example": {
             "type": "mode",
             "value": "MANUAL"
-          }
+          },
+          "allowed_values": [
+            "MANUAL",
+            "AUTO",
+            "STOP"
+          ]
         },
-  
         "command": {
           "direction": "Streamlit -> ESP32",
           "allowed_values": [
@@ -161,9 +164,12 @@
             "STOP",
             "PAUSE",
             "RESUME"
-          ]
+          ],
+          "example": {
+            "type": "command",
+            "value": "START"
+          }
         },
-  
         "telemetry": {
           "direction": "ESP32 -> Streamlit",
           "example": {
@@ -171,38 +177,54 @@
             "x": 1.2,
             "y": 0.8,
             "theta": 1.57,
-            "speed": 0.45,
-            "battery": 87
-          }
+            "speed": 0.08,
+            "battery": -1,
+            "mode": "AUTO",
+            "state": "RUNNING",
+            "traj_i": 1,
+            "traj_n": 3,
+            "w1": 1.5,
+            "w2": -2,
+            "w3": 0.5
+          },
+          "battery_description": "-1 indicates the measurement is unavailable."
         },
-  
         "status": {
           "direction": "ESP32 -> Streamlit",
           "example": {
             "type": "status",
             "mode": "AUTO",
             "state": "RUNNING"
-          }
+          },
+          "error_description": "The optional error string explains why the request was rejected."
         }
       }
     },
-  
     "http_api": {
       "endpoints": {
         "upload_trajectory": {
           "method": "POST",
           "path": "/trajectory",
-          "purpose": "Upload a new trajectory to ESP32"
+          "purpose": "Upload a new trajectory to ESP32",
+          "responses": {
+            "200": "Trajectory stored without changing mode",
+            "400": "Invalid or missing trajectory data",
+            "409": "Robot is running or paused",
+            "413": "Body exceeds 8192 bytes"
+          }
         },
-  
         "get_trajectory": {
           "method": "GET",
           "path": "/trajectory",
           "purpose": "Retrieve the currently stored trajectory"
+        },
+        "health": {
+          "method": "GET",
+          "path": "/",
+          "purpose": "Check HTTP connectivity"
         }
       }
     },
-  
     "architecture": {
       "flow": [
         "Streamlit",
@@ -211,7 +233,6 @@
         "Motor Controller",
         "Motors"
       ],
-  
       "manual_flow": [
         "User moves virtual joystick",
         "Streamlit generates joystick command",
@@ -220,23 +241,22 @@
         "PID controller calculates motor output",
         "Motor driver drives motors"
       ],
-  
       "autonomous_flow": [
         "User creates trajectory in Streamlit",
         "Streamlit sends trajectory to ESP32 using HTTP",
         "ESP32 stores trajectory",
+        "User selects AUTO",
         "User sends START command",
         "ESP32 follows trajectory",
         "ESP32 sends telemetry to Streamlit through WebSocket"
       ]
     },
-  
     "important_constraints": [
       "Do not require firmware re-upload when trajectory changes.",
       "Trajectory is data, not firmware.",
-      "Motor control and PID must run locally on ESP32.",
+      "Motor control and PID run locally in a dedicated task on ESP32-S3.",
       "Do not depend on Streamlit for the high-frequency motor control loop.",
-      "Implement communication-loss safety stop.",
+      "Stop MANUAL on joystick heartbeat loss.",
       "Manual control should prioritize low latency.",
       "Autonomous mode should continue using the stored trajectory even if Streamlit temporarily disconnects."
     ]

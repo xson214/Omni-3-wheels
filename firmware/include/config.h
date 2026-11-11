@@ -24,13 +24,14 @@
 #define PWM_MAX            255
 
 #define LAMBDA_POSE        0.6f
-#define CTRL_DT_S          0.01f
-#define POSE_TOL           0.001f
+#define CTRL_PERIOD_MS     10
+#define POSE_YAW_TOL_RAD   0.06f
+#define POSE_XY_TOL_M      0.01f
 #define CONS_EPS_TPS       0.01f
 
-#define ENCODER_TICKS_PER_MOTOR_REV   32
-#define GEAR_RATIO                    131
-#define TICKS_PER_WHEEL_REV           (ENCODER_TICKS_PER_MOTOR_REV * GEAR_RATIO)
+// Provisional: measure A-rising counts per output-wheel revolution on the robot.
+#define TICKS_PER_WHEEL_REV           4192
+static constexpr int ENC_SIGN[3] = {1, 1, 1};
 
 #define SERIAL_BAUD                   115200
 #define CMD_WATCHDOG_MS               200
@@ -38,3 +39,7 @@
 #define TELEMETRY_PERIOD_MS           50
 
 #define TRAJ_MAX_POINTS               64
+#define WORLD_COORD_LIMIT_M           1000.0f
+#define SERIAL_LINEAR_LIMIT_M_S       1.0f
+#define SERIAL_ANGULAR_LIMIT_RAD_S    10.0f
+#define SERIAL_YAW_LIMIT_DEG          36000.0f

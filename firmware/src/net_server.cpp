@@ -11,6 +11,9 @@
 static WebServer g_http(HTTP_PORT);
 static WebSocketsServer g_ws(WS_PORT);
 
+static constexpr size_t MAX_WS_COMMAND_BYTES = 256;
+static constexpr size_t MAX_TRAJECTORY_BODY_BYTES = 8 * 1024;
+
 static const char* mode_name(ControlMode m) {
   switch (m) {
     case MODE_MANUAL: return "MANUAL";
@@ -31,64 +34,94 @@ static const char* state_name(RunState s) {
   }
 }
 
-static void send_status_to(uint8_t num) {
+static String status_json(const char* error = nullptr) {
+  const ControlSnapshot snapshot = control_get_snapshot();
   JsonDocument doc;
   doc["type"] = "status";
-  doc["mode"] = mode_name(control_get_mode());
-  doc["state"] = state_name(control_get_state());
+  doc["mode"] = mode_name(snapshot.mode);
+  doc["state"] = state_name(snapshot.state);
+  if (error != nullptr) doc["error"] = error;
   String out;
   serializeJson(doc, out);
+  return out;
+}
+
+static void send_status_to(uint8_t num, const char* error = nullptr) {
+  String out = status_json(error);
   g_ws.sendTXT(num, out);
 }
 
-static void broadcast_status(void) {
-  JsonDocument doc;
-  doc["type"] = "status";
-  doc["mode"] = mode_name(control_get_mode());
-  doc["state"] = state_name(control_get_state());
-  String out;
-  serializeJson(doc, out);
+static bool read_number(JsonVariantConst value, double& result) {
+  if (!value.is<double>()) return false;
+  result = value.as<double>();
+  return isfinite(result);
+}
+
+static void report_command_result(uint8_t num, bool accepted) {
+  if (!accepted) {
+    send_status_to(num, "command not allowed in current mode/state");
+    return;
+  }
+  String out = status_json();
   g_ws.broadcastTXT(out);
 }
 
 static void handle_ws_message(uint8_t num, uint8_t* payload, size_t len) {
+  if (len > MAX_WS_COMMAND_BYTES) {
+    send_status_to(num, "message too large");
+    return;
+  }
   JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, payload, len);
-  if (err) return;
+  DeserializationError err = deserializeJson(doc, payload, len, DeserializationOption::NestingLimit(4));
+  if (err || !doc.is<JsonObject>()) {
+    send_status_to(num, "invalid JSON message");
+    return;
+  }
 
   const char* type = doc["type"] | "";
   if (strcmp(type, "joystick") == 0) {
-    float x = doc["x"] | 0.0f;
-    float y = doc["y"] | 0.0f;
+    double x, y;
+    if (!read_number(doc["x"], x) || !read_number(doc["y"], y) ||
+        fabs(x) > 1.0 || fabs(y) > 1.0) {
+      send_status_to(num, "joystick x and y must be numbers in [-1, 1]");
+      return;
+    }
     control_set_joystick(x, y);
   } else if (strcmp(type, "mode") == 0) {
-    const char* value = doc["value"] | "STOP";
+    const char* value = doc["value"] | "";
+    ControlMode mode;
     if (strcasecmp(value, "MANUAL") == 0) {
-      control_set_mode(MODE_MANUAL);
+      mode = MODE_MANUAL;
     } else if (strcasecmp(value, "AUTO") == 0) {
-      control_set_mode(MODE_AUTO);
+      mode = MODE_AUTO;
+    } else if (strcasecmp(value, "STOP") == 0) {
+      mode = MODE_STOP;
     } else {
-      control_set_mode(MODE_STOP);
+      send_status_to(num, "unknown mode");
+      return;
     }
-    broadcast_status();
+    report_command_result(num, control_set_mode(mode));
   } else if (strcmp(type, "command") == 0) {
-    const char* cmd = doc["value"] | doc["command"] | "";
-    // support both {"type":"command","value":"STOP"} and {"type":"command","command":"STOP"}
-    if (cmd[0] == 0) {
-      // idea.json example uses allowed_values at top level sometimes — also accept "cmd"
-      cmd = doc["cmd"] | "";
-    }
+    // Keep the legacy command keys for clients that use them.
+    const char* cmd = doc["value"] | "";
+    if (cmd[0] == '\0') cmd = doc["command"] | "";
+    if (cmd[0] == '\0') cmd = doc["cmd"] | "";
+    bool accepted = true;
     if (strcasecmp(cmd, "START") == 0) {
-      control_command_start();
+      accepted = control_command_start();
     } else if (strcasecmp(cmd, "STOP") == 0) {
       control_command_stop();
-      control_set_mode(MODE_STOP);
     } else if (strcasecmp(cmd, "PAUSE") == 0) {
-      control_command_pause();
+      accepted = control_command_pause();
     } else if (strcasecmp(cmd, "RESUME") == 0) {
-      control_command_resume();
+      accepted = control_command_resume();
+    } else {
+      send_status_to(num, "unknown command");
+      return;
     }
-    broadcast_status();
+    report_command_result(num, accepted);
+  } else {
+    send_status_to(num, "unknown message type");
   }
 }
 
@@ -121,32 +154,58 @@ static void handle_get_trajectory(void) {
   g_http.send(200, "application/json", out);
 }
 
+static void send_trajectory_error(int status, const char* error) {
+  JsonDocument doc;
+  doc["ok"] = false;
+  doc["err"] = error;
+  String out;
+  serializeJson(doc, out);
+  g_http.send(status, "application/json", out);
+}
+
 static void handle_post_trajectory(void) {
   if (!g_http.hasArg("plain")) {
-    g_http.send(400, "application/json", "{\"ok\":false,\"err\":\"no body\"}");
+    send_trajectory_error(400, "no body");
+    return;
+  }
+  const String body = g_http.arg("plain");
+  if (body.length() > MAX_TRAJECTORY_BODY_BYTES) {
+    send_trajectory_error(413, "body must be at most 8 KiB");
     return;
   }
   JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, g_http.arg("plain"));
-  if (err) {
-    g_http.send(400, "application/json", "{\"ok\":false,\"err\":\"bad json\"}");
+  DeserializationError err = deserializeJson(doc, body, DeserializationOption::NestingLimit(4));
+  if (err || !doc.is<JsonObject>()) {
+    send_trajectory_error(400, "invalid JSON object");
     return;
   }
-  JsonArray pts = doc["points"].as<JsonArray>();
-  if (pts.isNull() || pts.size() == 0) {
-    g_http.send(400, "application/json", "{\"ok\":false,\"err\":\"no points\"}");
+  if (!doc["type"].isUnbound() && strcmp(doc["type"] | "", "trajectory") != 0) {
+    send_trajectory_error(400, "type must be trajectory when provided");
+    return;
+  }
+  JsonArrayConst pts = doc["points"].as<JsonArrayConst>();
+  if (pts.isNull() || pts.size() == 0 || pts.size() > TRAJ_MAX_POINTS) {
+    send_trajectory_error(400, "points must be an array with 1 to 64 elements");
     return;
   }
   TrajPoint buf[TRAJ_MAX_POINTS];
   int n = 0;
-  for (JsonObject p : pts) {
-    if (n >= TRAJ_MAX_POINTS) break;
-    buf[n].x = p["x"] | 0.0f;
-    buf[n].y = p["y"] | 0.0f;
-    n++;
+  for (JsonVariantConst p : pts) {
+    double x, y;
+    if (!p.is<JsonObjectConst>() || !read_number(p["x"], x) || !read_number(p["y"], y) ||
+        fabs(x) > WORLD_COORD_LIMIT_M || fabs(y) > WORLD_COORD_LIMIT_M) {
+      send_trajectory_error(400, "each point needs numeric x and y in [-1000, 1000] m");
+      return;
+    }
+    buf[n++] = {static_cast<float>(x), static_cast<float>(y)};
   }
-  if (!control_set_trajectory(buf, n)) {
-    g_http.send(500, "application/json", "{\"ok\":false}");
+  const TrajectoryResult result = control_set_trajectory(buf, n);
+  if (result == TrajectoryResult::Busy) {
+    send_trajectory_error(409, "stop the current run before uploading");
+    return;
+  }
+  if (result != TrajectoryResult::Ok) {
+    send_trajectory_error(400, "invalid trajectory");
     return;
   }
   g_http.send(200, "application/json", "{\"ok\":true}");
@@ -193,29 +252,30 @@ void net_server_init(void) {
   Serial.printf("HTTP :%d  WS :%d\n", HTTP_PORT, WS_PORT);
 }
 
-void net_server_loop(void) {
+void net_server_poll_http(void) {
   g_http.handleClient();
+}
+
+void net_server_poll_ws(void) {
   g_ws.loop();
 }
 
 void net_server_send_telemetry(void) {
-  Pose2D p = control_get_pose();
+  const ControlSnapshot snapshot = control_get_snapshot();
   JsonDocument doc;
   doc["type"] = "telemetry";
-  doc["x"] = p.x;
-  doc["y"] = p.y;
-  doc["theta"] = p.theta;
-  doc["speed"] = control_get_speed();
+  doc["x"] = snapshot.pose.x;
+  doc["y"] = snapshot.pose.y;
+  doc["theta"] = snapshot.pose.theta;
+  doc["speed"] = snapshot.speed;
   doc["battery"] = -1;
-  doc["mode"] = mode_name(control_get_mode());
-  doc["state"] = state_name(control_get_state());
-  doc["traj_i"] = control_traj_index();
-  doc["traj_n"] = control_traj_count();
-  float w[3];
-  control_get_omega_meas(w);
-  doc["w1"] = w[0];
-  doc["w2"] = w[1];
-  doc["w3"] = w[2];
+  doc["mode"] = mode_name(snapshot.mode);
+  doc["state"] = state_name(snapshot.state);
+  doc["traj_i"] = snapshot.traj_index;
+  doc["traj_n"] = snapshot.traj_count;
+  doc["w1"] = snapshot.omega_meas[0];
+  doc["w2"] = snapshot.omega_meas[1];
+  doc["w3"] = snapshot.omega_meas[2];
   String out;
   serializeJson(doc, out);
   g_ws.broadcastTXT(out);
