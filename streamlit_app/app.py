@@ -18,12 +18,13 @@ import websocket
 from websockets.exceptions import ConnectionClosed
 from websockets.sync.server import ServerConnection, serve
 
+from kinematics_tabs import render_forward_tab, render_inverse_tab, render_simulation_tab
+from omni_model import TRAJ_MAX_POINTS, WORLD_COORD_LIMIT_M
+
 
 DEFAULT_HOST = "192.168.4.1"
 HTTP_PORT = 80
 WS_PORT = 81
-TRAJ_MAX_POINTS = 64
-TRAJ_MAX_COORD_M = 1000
 
 
 @dataclass
@@ -269,8 +270,8 @@ def parse_points(text: str) -> list[dict[str, float]]:
             x, y = map(float, parts)
         except ValueError:
             raise ValueError(f"Line {number}: x and y must be numbers.") from None
-        if not all(math.isfinite(value) and abs(value) <= TRAJ_MAX_COORD_M for value in (x, y)):
-            raise ValueError(f"Line {number}: x and y must be finite and within ±{TRAJ_MAX_COORD_M} m.")
+        if not all(math.isfinite(value) and abs(value) <= WORLD_COORD_LIMIT_M for value in (x, y)):
+            raise ValueError(f"Line {number}: x and y must be finite and within ±{WORLD_COORD_LIMIT_M:g} m.")
         if len(points) == TRAJ_MAX_POINTS:
             raise ValueError(f"Line {number}: at most {TRAJ_MAX_POINTS} points are allowed.")
         points.append({"x": x, "y": y})
@@ -437,7 +438,9 @@ def main() -> None:
             st.metric("HTTP", "OK" if bridge.ping_http() else "DOWN")
 
     render_controls(bridge)
-    tab_manual, tab_auto = st.tabs(["Manual", "Autonomous"])
+    tab_manual, tab_auto, tab_forward, tab_inverse, tab_simulation = st.tabs(
+        ["Manual", "Autonomous", "Động học thuận", "Động học nghịch", "Mô phỏng đường đi"]
+    )
     with tab_manual:
         st.write("Apply MANUAL, press START, then hold and drag. Release to stop.")
         st.caption("Body frame: right → +vx, up → +vy. Open this app on the PC connected to the ESP32.")
@@ -446,9 +449,9 @@ def main() -> None:
     with tab_auto:
         st.write("Upload points in meters, then apply AUTO and press START.")
         default_csv = "0.0,0.0\n0.5,0.0\n1.0,0.5\n"
-        text = st.text_area("Points CSV (x,y per line)", value=default_csv, height=160)
+        trajectory_text = st.text_area("Points CSV (x,y per line)", value=default_csv, height=160)
         try:
-            points = parse_points(text)
+            points = parse_points(trajectory_text)
         except ValueError as exc:
             points = []
             st.error(str(exc))
@@ -470,6 +473,15 @@ def main() -> None:
                 st.json(bridge.get_trajectory())
             except requests.RequestException as exc:
                 st.error(str(exc))
+
+    with tab_forward:
+        render_forward_tab()
+
+    with tab_inverse:
+        render_inverse_tab()
+
+    with tab_simulation:
+        render_simulation_tab(trajectory_text, parse_points)
 
 
 if __name__ == "__main__":

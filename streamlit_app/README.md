@@ -48,7 +48,17 @@ Stop the current run, then enter one **x,y** pair per line and upload the trajec
 
 Apply **AUTO**, then press **START**. The robot follows the uploaded points and reports its progress in telemetry. **PAUSE** and **RESUME** preserve the current target. **STOP** ends the run. AUTO can continue following the stored trajectory after a temporary Wi-Fi disconnect.
 
-## 5. Protocol
+## 5. Kinematics and path simulation
+
+These three tabs work without connecting to the ESP32.
+
+- **Động học thuận** takes three signed wheel speeds in rad/s and the current heading in degrees. It returns global-frame ẋ, ẏ (m/s) and φ̇ (rad/s).
+- **Động học nghịch** takes a target x, y in meters and the current pose. It uses the firmware's AUTO rule ẋ = 0.6 × (x_target − x), ẏ = 0.6 × (y_target − y), and φ̇ = 0 to turn the position error into a velocity. Within 0.01 m of the target, the requested velocity is zero. The tab shows the wheel speeds before and after scaling all three to the 5.236 rad/s limit.
+- **Mô phỏng đường đi** accepts its own list of points in meters. Edit the list or use **Sao chép điểm từ Autonomous**, then click **Chạy mô phỏng**. The simulation starts from (0 m, 0 m, 0°), runs for up to 60 seconds and plots three paths on the same x-y axes in meters. **Lý thuyết** integrates the ideal wheel motion. **Encoder** estimates position from simulated signed wheel ticks using forward kinematics. **IMU** integrates simulated gyroscope and accelerometer readings, with adjustable slip and sensor biases. A high encoder resolution can make the theory and encoder paths overlap.
+
+See the [kinematics equations](../README_FIRMWARE.md#2-động-học). All three curves are generated in software. IMU drift in the chart comes from the simulation settings and does not represent a particular chip.
+
+## 6. Protocol
 
 [idea.json](../idea.json) lists the message shapes. WebSocket accepts the following messages.
 
