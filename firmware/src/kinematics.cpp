@@ -4,8 +4,9 @@
 #include <math.h>
 
 float wrap_pi(float a) {
-  while (a > PI) a -= 2.0f * PI;
-  while (a < -PI) a += 2.0f * PI;
+  a = fmodf(a, 2.0f * PI);
+  if (a > PI) a -= 2.0f * PI;
+  if (a < -PI) a += 2.0f * PI;
   return a;
 }
 

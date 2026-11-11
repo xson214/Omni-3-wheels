@@ -1,82 +1,77 @@
 # OmniCar Streamlit + ESP32-S3
 
-Full-stack control UI for the 3-wheel omni robot.
+The app sends MANUAL and AUTO commands and displays telemetry from the ESP32-S3. See the [hardware pin map and encoder calibration](../README_Xe_3_Banh_Omni_ESP32S3.md) and [firmware specification](../README_FIRMWARE.md).
 
-## Hardware / pin map
+## 1. Flash firmware
 
-Pins are taken only from `README_Xe_3_Banh_Omni_ESP32S3.md`:
+From the repository root, run
 
-| Wheel | PWM | IN1 | IN2 | Enc A | Enc B |
-|------:|----:|----:|----:|------:|------:|
-| 1 | 4 | 5 | 6 | 9 | 10 |
-| 2 | 7 | 15 | 16 | 11 | 12 |
-| 3 | 17 | 18 | 8 | 13 | 14 |
-
-Kinematics, PID gains, and control loop follow `README_FIRMWARE.md`.
-Networking follows `idea.json`.
-
-## 1. Flash firmware (PlatformIO)
-
-```bash
+~~~powershell
 cd firmware
 pio run -t upload
 pio device monitor -b 115200
-```
+~~~
 
-Nếu build lỗi do đường dẫn có dấu tiếng Việt trên Windows, dùng junction ASCII:
+The ESP32 starts the **OmniCar** Wi-Fi access point with password **omnicar123**. The default address is **192.168.4.1**, with HTTP on port 80 and WebSocket on port 81. For STA mode, set **WIFI_USE_STA** and the Wi-Fi credentials in [wifi_config.h](../firmware/include/wifi_config.h), then use the address printed on Serial.
 
-```bat
-mklink /J C:\omni_fw "E:\Xe Tự Hành và Robot di động\source\firmware"
-cd /d C:\omni_fw
-pio run
-pio run -t upload
-```
+## 2. Start Streamlit
 
-ESP32 creates SoftAP:
+Join the ESP32 network. Use the same computer for Streamlit and the browser so the manual control pad can reach its local WebSocket relay. From the repository root on Windows, run
 
-- SSID: `OmniCar`
-- Password: `omnicar123`
-- HTTP: `http://192.168.4.1/`
-- WebSocket: `ws://192.168.4.1:81/`
-
-Connect your PC Wi-Fi to `OmniCar` before starting Streamlit.
-
-Optional STA mode: edit `firmware/include/wifi_config.h` (`WIFI_USE_STA 1`).
-
-### Serial debug (USB)
-
-| Cmd | Meaning |
-|-----|---------|
-| `V vx vy w` | Global velocity |
-| `B vx vy w` | Body velocity |
-| `P x y yaw_deg` | Pose target |
-| `S` | Stop |
-| `?` | Print pose + ω |
-
-## 2. Run Streamlit
-
-```bash
+~~~powershell
 cd streamlit_app
 python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-pip install -r requirements.txt
-streamlit run app.py
-```
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m streamlit run app.py
+~~~
 
-In the sidebar, keep ESP32 IP as `192.168.4.1` (SoftAP).
+Open the **Local URL** printed by Streamlit. Enter the ESP32 IP in the sidebar. Use the HTTP check to verify reachability and confirm the firmware reports mode and state over WebSocket.
 
-## 3. Quick tests
+## 3. Drive in MANUAL
 
-1. HTTP metric shows OK after joining SoftAP.
-2. MANUAL + stream joystick: wheels respond; release / disconnect → stop (300 ms firmware timeout).
-3. Upload CSV trajectory → mode AUTO → START → robot walks waypoints.
-4. STOP always zeros motors.
+1. Select **MANUAL** and apply the mode. Check for **MANUAL / IDLE**.
+2. Press **START**. Check for **MANUAL / RUNNING**.
+3. Hold and drag on the pad to drive. **x** commands body-frame **vx**, **y** commands **vy**, and yaw rate is zero. Releasing the pad sends a zero command and leaves MANUAL ready for another hold.
+4. Press **STOP** to end the run. Check for **STOP / IDLE**. Select MANUAL and press START again before driving.
 
-## WebSocket / HTTP messages
+If the ESP32 misses the joystick heartbeat for 300 ms during motion, it stops and requires START before accepting another drive command. After **PAUSE** and **RESUME**, start a fresh hold on the pad.
 
-- `{"type":"joystick","x":0.3,"y":0.8}`
-- `{"type":"mode","value":"MANUAL"|"AUTO"|"STOP"}`
-- `{"type":"command","value":"START"|"STOP"|"PAUSE"|"RESUME"}`
-- Telemetry: `{"type":"telemetry","x",..."theta","speed",...}`
-- `POST/GET /trajectory` with `{"type":"trajectory","points":[{"x":0,"y":0},...]}`
+## 4. Follow a trajectory in AUTO
+
+Stop the current run, then enter one **x,y** pair per line and upload the trajectory. Supply 1–64 points. Each coordinate must be a finite number between −1000 m and +1000 m. Coordinates are in the odometry frame whose origin and heading are set when the ESP32 boots. Upload is allowed while IDLE and leaves the mode unchanged.
+
+~~~csv
+0.0,0.0
+0.5,0.0
+1.0,0.5
+~~~
+
+Apply **AUTO**, then press **START**. The robot follows the uploaded points and reports its progress in telemetry. **PAUSE** and **RESUME** preserve the current target. **STOP** ends the run. AUTO can continue following the stored trajectory after a temporary Wi-Fi disconnect.
+
+## 5. Kinematics and path simulation
+
+These three tabs work without connecting to the ESP32.
+
+- **Động học thuận** takes three signed wheel speeds in rad/s and the current heading in degrees. It returns global-frame ẋ, ẏ (m/s) and φ̇ (rad/s).
+- **Động học nghịch** takes a target x, y in meters and the current pose. It uses the firmware's AUTO rule ẋ = 0.6 × (x_target − x), ẏ = 0.6 × (y_target − y), and φ̇ = 0 to turn the position error into a velocity. Within 0.01 m of the target, the requested velocity is zero. The tab shows the wheel speeds before and after scaling all three to the 5.236 rad/s limit.
+- **Mô phỏng đường đi** accepts its own list of points in meters. Edit the list or use **Sao chép điểm từ Autonomous**, then click **Chạy mô phỏng**. The simulation starts from (0 m, 0 m, 0°), runs for up to 60 seconds and plots three paths on the same x-y axes in meters. **Lý thuyết** integrates the ideal wheel motion. **Encoder** estimates position from simulated signed wheel ticks using forward kinematics. **IMU** integrates simulated gyroscope and accelerometer readings, with adjustable slip and sensor biases. A high encoder resolution can make the theory and encoder paths overlap.
+
+See the [kinematics equations](../README_FIRMWARE.md#2-động-học). All three curves are generated in software. IMU drift in the chart comes from the simulation settings and does not represent a particular chip.
+
+## 6. Protocol
+
+[idea.json](../idea.json) lists the message shapes. WebSocket accepts the following messages.
+
+~~~json
+{"type":"mode","value":"MANUAL"}
+{"type":"command","value":"START"}
+{"type":"joystick","x":0.3,"y":0.8}
+~~~
+
+Modes are **MANUAL**, **AUTO**, and **STOP**. Commands are **START**, **STOP**, **PAUSE**, and **RESUME**. Joystick coordinates are numbers in **[-1, 1]**. Status messages report the firmware's actual mode and state and may include an error. Telemetry reports position in meters, angle in radians, speed in m/s, wheel speeds in rad/s and trajectory progress. The battery field is **−1** because voltage measurement is unavailable.
+
+**GET /trajectory** retrieves the stored points. **POST /trajectory** accepts a JSON body and returns an error for invalid points or if the firmware is RUNNING or PAUSED. The server rejects bodies over 8 KiB.
+
+~~~json
+{"type":"trajectory","points":[{"x":0.0,"y":0.0},{"x":0.5,"y":0.0}]}
+~~~
