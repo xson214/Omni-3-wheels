@@ -83,13 +83,15 @@ class EspBridge:
                 except (OSError, websocket.WebSocketException) as exc:
                     with self.store.lock:
                         self.store.link_error = str(exc)
-                self._stop.wait(0.5)
+                self._stop.wait(2.0)
         finally:
             self._stop.set()
             self._relay.shutdown()
 
     def _receive(self) -> None:
-        ws = websocket.create_connection(self.ws_url, timeout=0.2)
+        # Allow Wi-Fi TCP/HTTP handshake to finish before using a short read poll.
+        ws = websocket.create_connection(self.ws_url, timeout=3.0)
+        ws.settimeout(0.2)
         with self._send_lock:
             self._ws = ws
         try:
@@ -162,6 +164,12 @@ class EspBridge:
             sent = self._send_locked({"type": message_type, "value": value})
         self._notify_release(pad)
         return sent
+
+    def set_encoder_cpr(self, cpr: list[float]) -> bool:
+        with self.store.lock:
+            self.store.command_error = ""
+        with self._send_lock:
+            return self._send_locked({"type": "calibration", "cpr": cpr})
 
     def _handle_pad(self, connection: ServerConnection) -> None:
         # A random path grants access only to this Streamlit session's pad.
@@ -314,6 +322,31 @@ def render_controls(bridge: EspBridge) -> None:
         st.warning(f"WebSocket: {link_error}")
     if command_error:
         st.error(f"ESP32 rejected the request: {command_error}")
+    if connected and telemetry.get("fault"):
+        st.warning(f"ESP32: {telemetry['fault']}")
+    if connected and not telemetry.get("imu_calibrated"):
+        st.warning("MPU chưa hiệu chuẩn. Bấm STOP, giữ xe đứng yên rồi bấm Hiệu chuẩn lại MPU.")
+    if st.button("Hiệu chuẩn lại MPU", disabled=not connected or state != "IDLE"):
+        bridge.send_action("command", "CALIBRATE_IMU")
+
+    with st.expander("Hiệu chuẩn encoder và đặt gốc"):
+        st.write("Nhập số cạnh lên kênh A đã đo trên một vòng bánh, riêng cho từng bánh.")
+        cpr_columns = st.columns(3)
+        cpr_text = [column.text_input(f"CPR bánh {i + 1}", key=f"cpr_{i}")
+                    for i, column in enumerate(cpr_columns)]
+        if st.button("Xác nhận CPR đã đo", disabled=not connected or state != "IDLE"):
+            try:
+                values = [float(value) for value in cpr_text]
+                if not all(math.isfinite(value) and 1 <= value <= 1_000_000 for value in values):
+                    raise ValueError
+                if not bridge.set_encoder_cpr(values):
+                    st.error("Không gửi được CPR tới ESP32.")
+            except ValueError:
+                st.error("Cần nhập đủ 3 CPR hữu hạn trong khoảng 1–1.000.000 tick/vòng.")
+        if st.button("Đặt gốc odometry", disabled=not connected or state != "IDLE"):
+            if not bridge.send_action("command", "RESET_ODOMETRY"):
+                st.error("Không gửi được lệnh đặt gốc.")
+        st.caption("Giữ xe đứng yên khi đặt gốc. CPR cần xác nhận lại sau khi khởi động nếu chưa lưu trong cấu hình firmware.")
 
     selected_mode = st.radio("Select mode", ["MANUAL", "AUTO", "STOP"], horizontal=True)
     action = ("mode", selected_mode) if st.button("Apply mode", disabled=not connected) else None
@@ -335,6 +368,13 @@ def render_controls(bridge: EspBridge) -> None:
             for column, key, label in zip(
                 metrics, ("x", "y", "theta", "speed"), ("x (m)", "y (m)", "Yaw (rad)", "Speed (m/s)")
             ):
+                value = telemetry.get(key)
+                column.metric(label, f"{value:.3f}" if isinstance(value, (int, float)) else "—")
+            details = st.columns(4)
+            details[0].metric("Encoder CPR", "Đã cấu hình" if telemetry.get("encoder_calibrated") else "Chưa cấu hình")
+            details[1].metric("MPU", "Sẵn sàng" if telemetry.get("imu_healthy") and telemetry.get("imu_calibrated") else "Chưa sẵn sàng")
+            for column, key, label in zip(details[2:], ("distance_m", "target_error_m"),
+                                          ("Quãng đường ước lượng (m)", "Sai số tới đích (m)")):
                 value = telemetry.get(key)
                 column.metric(label, f"{value:.3f}" if isinstance(value, (int, float)) else "—")
             st.json(telemetry)
@@ -430,7 +470,8 @@ def main() -> None:
 
     with st.sidebar:
         host = st.text_input("ESP32 IP", value=DEFAULT_HOST).strip()
-        st.write("SoftAP **OmniCar** · password **omnicar123**")
+        st.write("SoftAP **OMNI3_ESP32S3** · password **OmniRobot123**")
+        st.caption("Kết nối máy tính vào Wi-Fi của xe trước khi gửi lệnh.")
         reconnect = st.button("Reconnect WebSocket")
     bridge = get_bridge(host, reconnect)
     with st.sidebar:
@@ -463,7 +504,14 @@ def main() -> None:
             try:
                 response = bridge.upload_trajectory(points)
                 if response.get("ok"):
-                    st.success(f"Uploaded {len(points)} points.")
+                    stored = bridge.get_trajectory().get("points", [])
+                    if len(stored) == len(points) and all(
+                        math.isclose(a[k], b[k], rel_tol=1e-5, abs_tol=1e-5)
+                        for a, b in zip(points, stored) for k in ("x", "y")
+                    ):
+                        st.success(f"Đã gửi và đọc lại xác nhận {len(points)} điểm từ ESP32. Chọn AUTO → Apply mode → START.")
+                    else:
+                        st.error("Điểm đọc lại chưa khớp. Bấm STOP rồi gửi lại.")
                 else:
                     st.error(f"ESP32 rejected trajectory: {response.get('err', 'unknown error')}")
             except (requests.RequestException, ValueError) as exc:

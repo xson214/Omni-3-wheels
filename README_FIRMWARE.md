@@ -1,113 +1,115 @@
-# Đặc tả firmware xe Omni 3 bánh
+# Firmware xe Omni 3 bánh
 
-Firmware trong [firmware/](firmware/) chạy trên ESP32-S3 với Arduino và PlatformIO. Xem [sơ đồ chân và hiệu chuẩn encoder](README_Xe_3_Banh_Omni_ESP32S3.md), [cách nạp và điều khiển từ Streamlit](streamlit_app/README.md) và [đặc tả Wi-Fi](idea.json).
+Firmware PlatformIO cho ESP32-S3, ba L298N/GM25 encoder và MPU9250. [Sơ đồ chân](README_Xe_3_Banh_Omni_ESP32S3.md), [đối chiếu slide](docs/DOI_CHIEU_CONG_THUC.md), [hướng dẫn Wi-Fi](streamlit_app/README.md).
 
-## 1. Thông số
+## Kết nối và chạy
 
-Các giá trị điều khiển nằm trong [config.h](firmware/include/config.h). [pins.h](firmware/include/pins.h) ánh xạ PWM, IN1, IN2 và hai kênh encoder của mỗi bánh.
+ESP32 phát Wi-Fi **OMNI3_ESP32S3**, mật khẩu **OmniRobot123**. Máy tính kết nối mạng này rồi mở **http://192.168.4.1**. Trang điều khiển chạy trực tiếp trên ESP32, không cần Internet hoặc Streamlit. HTTP cổng 80, WebSocket cổng 81. Streamlit vẫn dùng được.
+
+Giữ xe đứng yên và nằm ngang khoảng 3,3 giây khi bật nguồn để hiệu chuẩn gyro. CPR mặc định đã cấu hình danh định là **2028 = 26 × 78 tick/vòng**, dựa trên thông số nhà bán hàng do người dùng cung cấp và cách đếm A-RISING 1x. Chưa kiểm chứng số vòng thực tế. Đo encoder bằng chức năng ghi mốc / tính CPR trên trang web hoặc nhập ba CPR đã đo qua Serial. AUTO/POSE còn yêu cầu MPU khỏe và hiệu chuẩn thành công. Các thông số CPR và quỹ đạo nhập lúc chạy nằm trong RAM, cần nhập lại sau khởi động.
+
+## Thông số và công thức
 
 | Thông số | Giá trị |
-|---|---:|
-| Bán kính bánh **r** | 0,029 m |
-| Khoảng cách tâm xe đến tâm bánh **L** | 0,12 m |
-| Góc bánh **α** | 0°, +120°, −120° |
-| Tốc độ đặt tối đa của bánh | 50 rpm ≈ 5,236 rad/s |
-| PID tốc độ (**Kp**, **Ki**, **Kd**) | 150 / 0,001 / 0,0001 |
-| PWM | 0…255, chiều qua IN1/IN2 |
-| Hệ số bám vị trí **λ** | 0,6 |
-| Chu kỳ điều khiển danh định | 10 ms (100 Hz) |
-| Dung sai vị trí, góc | 0,01 m, 0,06 rad |
-| Ngưỡng tốc độ đặt của bánh | 0,01 vòng/s |
+|---|---|
+| Bán kính bánh r / khoảng cách tâm L | 0,029 m / 0,12 m |
+| Góc bánh α | 0°, +120°, −120° |
+| Tốc độ bánh tối đa | 50 rpm ≈ 5,236 rad/s |
+| Chu kỳ điều khiển | 10 ms |
+| PID tốc độ Kp / Ki / Kd | 150 / 100 / 0,02, thời gian tính bằng giây |
+| Feedforward Kv | 255 / (50/60) PWM/(vòng/s) |
+| PID vị trí x/y | 0,8 / 0,08 / 0,10 |
+| PID yaw | 1,5 / 0,05 / 0,10 |
+| Tốc độ / gia tốc tham chiếu AUTO | 0,06 m/s / 0,08 m/s² |
+| Dung sai vị trí / góc | 0,01 m / 0,06 rad |
 
-Dung sai vị trí và góc là giá trị khởi đầu để bộ điều khiển có thể kết thúc gần đích. Dưới ngưỡng tốc độ đặt, PID tắt motor. Với lệnh tịnh tiến thuần, sai số nhỏ hơn khoảng 3,5 mm có thể làm cả ba tốc độ đặt lọt dưới ngưỡng này. Cần kiểm tra khả năng thắng ma sát và độ chính xác bám điểm trên xe thật trước khi chỉnh dung sai.
+Các hệ số PID là giá trị khởi đầu, chưa được hiệu chỉnh trên xe thật. Dung sai 1 cm áp dụng cho **ước lượng odometry**, không phải cam kết sai số vị trí thực. Độ trượt bánh và sai số kích thước vẫn gây sai lệch.
 
-Số đếm encoder mặc định là **4192 cạnh lên A/vòng bánh**, lấy từ giả định 32 × 131 và cần đo lại. Xem [quy trình hiệu chuẩn](README_Xe_3_Banh_Omni_ESP32S3.md#4-encoder). Nếu cấu hình 4192 nhưng thực tế chỉ có 330 count/vòng, tốc độ và độ dịch chuyển ước lượng sẽ thấp hơn thực tế khoảng 12,7 lần.
+Động học nghịch trong hệ toàn cục:
 
-## 2. Động học
+```text
+ω_i = [-sin(φ + α_i) × vx + cos(φ + α_i) × vy + L × wz] / r
+```
 
-Với góc hướng xe **φ** và vận tốc theo hệ tọa độ toàn cục **(ẋ, ẏ, φ̇)**, tốc độ góc mỗi bánh là
+Trong hệ thân xe dùng φ=0. Biến đổi toàn cục sang thân xe: `vx_b = cosφ vx + sinφ vy`, `vy_b = -sinφ vx + cosφ vy`. Động học thuận dùng tốc độ bánh có dấu:
 
-~~~text
-ω_i = [-sin(φ + α_i) × ẋ + cos(φ + α_i) × ẏ + L × φ̇] / r
-~~~
+```text
+vx = (2r/3) × Σ[-sin(φ + α_i) × ω_i]
+vy = (2r/3) × Σ[ cos(φ + α_i) × ω_i]
+wz = r/(3L) × Σω_i
+```
 
-Với lệnh **(vx, vy, wz)** theo thân xe, dùng cùng công thức với **φ = 0**. Chuyển vận tốc toàn cục sang hệ tọa độ thân xe theo phép quay sau.
+Ma trận khớp slide 8 và 10–12; các lỗi dấu tại những trang khai triển được ghi trong báo cáo đối chiếu. Slide không quy định PID. Firmware điều khiển tốc độ/vị trí, không điều khiển trực tiếp lực Newton qua PWM L298N.
 
-~~~text
-vx =  cos(φ) × ẋ + sin(φ) × ẏ
-vy = -sin(φ) × ẋ + cos(φ) × ẏ
-wz = φ̇
-~~~
+## Encoder và PID tốc độ
 
-Nếu tốc độ đặt lớn nhất vượt giới hạn, nhân cả ba tốc độ bánh cùng một hệ số **ω_max / max(|ω_i|)** để giữ hướng chuyển động.
+Đếm cạnh lên A, đọc B xác định chiều. Với N_i là CPR từng bánh, tốc độ có dấu `n_i = ENC_SIGN[i] × Δticks_i/(N_i × dt)` vòng/s, `ω_i = 2πn_i`. CPR mặc định là **2028 tick/vòng**; `ENCODER_CALIBRATED_DEFAULT=true` chấp nhận cấu hình danh định này, không chứng nhận hiệu chuẩn thực nghiệm. Nếu 26 xung của nhà bán hàng đã bao gồm nhiều cạnh, cần xác nhận lại quy ước và sửa CPR. Có thể đặt cờ false để yêu cầu xác nhận trước khi chạy. `MOTOR_SIGN` chỉnh chiều động cơ riêng với `ENC_SIGN`.
 
-Động học thuận sử dụng tốc độ góc đo có dấu.
+Đặt `d=sign(ω_ref)`, `n_ref=|ω_ref|/(2π)`, `n_meas=d × n_i`, `e=n_ref-n_meas`. Bánh quay ngược yêu cầu phải làm sai số tăng, không lấy trị tuyệt đối của tốc độ đo.
 
-~~~text
-ẋ = (2r/3) × Σ[-sin(φ + α_i) × ω_i]
-ẏ = (2r/3) × Σ[ cos(φ + α_i) × ω_i]
-φ̇ = (r/3L) × Σω_i
-~~~
+```text
+I_candidate = clamp(I + Ki × e × dt, -255, 255)
+D_raw = -(n_meas - n_meas_previous) / dt
+D = lọc thông thấp D_raw với tau=0,04 s
+PWM = clamp(Kv × n_ref + Kp × e + I + Kd × D, 0, 255)
+```
 
-Mỗi vòng điều khiển tích phân các giá trị này theo thời gian thực giữa hai lần lấy mẫu. Odometry bắt đầu từ **(0, 0, 0)** khi khởi động. Sai số có thể tích lũy do trượt bánh, sai số hình học và hiệu chuẩn encoder.
+Chỉ nhận bước tích phân không làm bão hòa nặng thêm. Xóa tích phân khi dừng hoặc đổi chiều. Nếu tốc độ đặt dưới 0,01 vòng/s thì tắt PWM. Feedforward Kv là ước lượng, cần hiệu chỉnh theo motor, nguồn và tải thật.
 
-## 3. PID và encoder
+## Bám quỹ đạo và MPU
 
-Encoder đếm cạnh lên trên A và đọc B để xác định dấu. **N** là số cạnh lên A đo được trên một vòng bánh. **Δn** là số đếm có dấu trong khoảng lấy mẫu **Δt**.
+AUTO tạo tham chiếu dọc từng đoạn thẳng, tăng tốc và giảm tốc trước đích. Nếu tham chiếu đi trước vị trí ước lượng quá 5 cm thì giảm tốc tham chiếu. PID x/y hiệu chỉnh sai số vị trí và vận tốc; PID yaw giữ góc lúc START. P dùng cùng bộ bám với góc đích riêng. Giới hạn vận tốc thân xe, tốc độ góc và tốc độ bánh bằng một hệ số chung, đồng thời ngăn tích phân tăng khi bão hòa.
 
-~~~text
-tốc độ [vòng/s] = Δn / (N × Δt)
-ω [rad/s]       = 2π × tốc độ [vòng/s]
-ω [rad/s]       = 2π × rpm / 60
-~~~
+Chỉ kết thúc điểm khi sai số vị trí ≤1 cm, góc ≤0,06 rad, tốc độ ≤0,008 m/s và tốc độ quay ≤0,04 rad/s liên tục 0,3 giây. Xe dừng tại từng đỉnh trước khi sang đoạn tiếp theo. Timeout mỗi đoạn là `15 + 3 × chiều_dài / 0,06` giây. Tối đa 64 điểm.
 
-PID mỗi bánh dùng sai số **|ω_đặt / (2π)| − |tốc_độ_đo|** theo vòng/s. Hệ số PID lấy chu kỳ danh định 10 ms làm chuẩn. Mỗi bước, phần tích phân nhân với **Δt / 10 ms** và phần vi phân chia cho tỷ lệ này. Chiều motor lấy từ dấu của tốc độ đặt. PID giới hạn PWM và bỏ phần tích phân mới ở bước bị bão hòa. Khi tốc độ đặt lọt dưới ngưỡng, firmware tắt PWM và xóa trạng thái PID của bánh đó.
+MPU6500/9250/9255 tại 0x68 được kiểm tra WHO_AM_I, cấu hình ±250°/s, ±2g, lọc DLPF và lấy mẫu 200 Hz. Hiệu chuẩn gyro gồm kiểm tra chuyển động, bias và tư thế lắp. Khi cảm biến gần nằm ngang, dấu gia tốc Z tĩnh xác định trục Z hướng lên/xuống. Lắp nghiêng nhiều hoặc hiệu chuẩn thất bại sẽ khóa AUTO/POSE; khởi động lại khi xe đứng yên để thử lại. Telemetry có mã nhận dạng và lý do khởi tạo thất bại.
 
-Vòng điều khiển chạy trong task riêng, lấy mẫu danh định mỗi 10 ms. Serial, HTTP và WebSocket được xử lý ngoài task này. Encoder tiếp tục cập nhật odometry trong lúc bánh còn quay sau lệnh dừng.
+```text
+wz_est = 0,98 × gyro_Z_đã_trừ_bias + 0,02 × wz_encoder
+heading_mid = heading + 0,5 × dt × wz_est
+x += vx(heading_mid) × dt
+y += vy(heading_mid) × dt
+heading = wrap(heading + wz_est × dt)
+distance_m += hypot(vx,vy) × dt
+```
 
-## 4. Chế độ và watchdog
+Không tích phân kép gia tốc thành vị trí. Chưa sử dụng magnetometer. Góc yaw tương đối và vị trí vẫn trôi theo thời gian; không phải định vị tuyệt đối. `distance_m` là độ dài đường đi ước lượng, khác khoảng cách thẳng tới đích. MANUAL có thể dùng encoder khi MPU lỗi; AUTO/POSE dừng khi mất mẫu MPU.
 
-| Chế độ | Cách chạy | Điều kiện dừng |
-|---|---|---|
-| MANUAL | Chọn chế độ, gửi START, rồi gửi joystick theo thân xe. | Quá 300 ms mất joystick trong khi đang có lệnh di chuyển thì dừng và cần START lại. |
-| AUTO | Nạp quỹ đạo, chọn AUTO, rồi gửi START. Xe lần lượt đến các điểm **x, y** theo odometry. | Hoàn thành quỹ đạo hoặc nhận STOP. Xe tiếp tục bám quỹ đạo khi mất Wi-Fi. |
-| V / B | Serial đặt vận tốc toàn cục / theo thân xe. | Quá 200 ms không làm mới lệnh hoặc nhận lệnh dừng. |
-| P | Serial đặt **x, y, yaw** và bật vòng bám vị trí, góc. | Đạt dung sai hoặc quá 200 ms không làm mới lệnh. |
+## Chế độ, giao thức và watchdog
 
-Chọn chế độ qua WebSocket đưa xe về IDLE. STOP kết thúc lệnh đang chạy và đưa xe về STOP/IDLE. Gói joystick chỉ điều khiển khi MANUAL đã được START. Trong MANUAL và AUTO, PAUSE ngắt motor. RESUME tiếp tục AUTO từ điểm đang theo hoặc cho phép giữ joystick lại trong MANUAL.
+| Chế độ | Hoạt động / điều kiện dừng |
+|---|---|
+| MANUAL | START rồi giữ hướng; quá 300 ms không cập nhật joystick đang chuyển động thì dừng |
+| AUTO | Nạp điểm, chọn AUTO, START; dừng khi xong, lỗi MPU, timeout hoặc nhận STOP |
+| V / B / P | Làm mới lệnh trong dưới 200 ms; quá hạn thì dừng |
+| PAUSE / RESUME | Tạm dừng motor; tiếp tục đoạn AUTO đang theo |
 
-AUTO sử dụng **ẋ = λ(x_đích − x)**, **ẏ = λ(y_đích − y)** và **φ̇ = 0**. POSE dùng cùng công thức và thêm **φ̇ = λ × sai số góc đã chuẩn hóa**. Quỹ đạo chứa tối đa 64 điểm, lưu trong RAM và mất khi ESP32 khởi động lại.
+Ngắt WebSocket của máy đang điều khiển sẽ dừng xe, kể cả AUTO. Ping/pong phát hiện mất kết nối im lặng sau vài giây; mất joystick MANUAL vẫn có watchdog 300 ms. Máy chỉ theo dõi ngắt kết nối không ảnh hưởng. Chu kỳ điều khiển vượt 100 ms dừng và báo lỗi. STOP luôn đưa về STOP/IDLE.
 
-## 5. Lệnh Serial
+HTTP: `GET /` trang điều khiển, `GET /status` trạng thái và ticks, `GET/POST /trajectory` đọc/nạp `{points:[{x,y},...]}`. WebSocket giữ các kiểu `mode`, `command`, `joystick`; bổ sung `{type:"calibration",cpr:[n1,n2,n3]}` và lệnh `RESET_ODOMETRY`. Telemetry có `distance_m`, `target_error_m`, `imu_healthy`, `imu_calibrated`, `encoder_calibrated`, `cpr`, `ticks`, `fault`.
 
-Baud **115200**, mỗi lệnh kết thúc bằng xuống dòng.
+Serial 115200, mỗi lệnh kết thúc bằng xuống dòng:
 
 | Lệnh | Ý nghĩa |
 |---|---|
-| **V &lt;vx&gt; &lt;vy&gt; &lt;wz&gt;** | Vận tốc toàn cục, m/s và rad/s |
-| **B &lt;vx&gt; &lt;vy&gt; &lt;wz&gt;** | Vận tốc theo thân xe, m/s và rad/s |
-| **P &lt;x&gt; &lt;y&gt; &lt;yaw_deg&gt;** | Đích toàn cục, m và độ |
-| **S** | Dừng và xóa lệnh đang chạy |
-| **?** | In vị trí, góc, tốc độ bánh và bộ đếm encoder tích lũy |
+| `V vx vy wz` | Vận tốc toàn cục, m/s và rad/s |
+| `B vx vy wz` | Vận tốc thân xe |
+| `P x y yaw_deg` | Đích toàn cục và góc theo độ |
+| `S` | Dừng |
+| `?` | Vị trí, tốc độ bánh, ticks, MPU và lỗi |
+| `C cpr1 cpr2 cpr3` | Xác nhận ba CPR đã đo, chỉ khi IDLE và đứng yên |
+| `Z` | Đặt gốc và quãng đường về 0, chỉ khi IDLE và đứng yên |
+| `T wheel pwm ms` | Thử một bánh treo tự do, bánh 1–3, PWM ±1–160, thời gian 50–1500 ms; chỉ từ STOP/IDLE |
+| `H` | Heartbeat cho T, gửi dưới 200 ms; không kéo dài thời hạn bài thử |
 
-~~~text
-B 0.05 0 0
-P 0.5 0.2 30
-?
-S
-~~~
+## Kiểm thử
 
-V, B và P yêu cầu đủ ba số hữu hạn. V và B chấp nhận mỗi thành phần tịnh tiến trong **±1 m/s** và tốc độ quay trong **±10 rad/s**. P chấp nhận mỗi tọa độ trong **±1000 m** và góc trong **±36000°**. Firmware giới hạn tốc độ bánh sau khi tính động học nghịch.
+```powershell
+python firmware/tests/run_host_tests.py
+python tests/test_imu_driver.py
+pio run -d firmware
+```
 
-Một lệnh V, B hoặc P hợp lệ bắt đầu điều khiển ngay. Để duy trì chuyển động, phần mềm gửi lệnh phải gửi lại lệnh tương ứng với khoảng cách giữa hai lần gửi nhỏ hơn 200 ms. Lệnh **?** chỉ đọc trạng thái. Ba giá trị sau trường **ticks** là số đếm encoder thô, có dấu, tích lũy từ lúc khởi động.
+Kiểm thử host biên dịch module C++ thật: ví dụ trong slide, đổi hệ tọa độ, giới hạn tốc độ, PID có dấu, anti-windup, bám đoạn với mô hình trễ/nhiễu. Kiểm thử MPU dùng I2C giả để kiểm tra đơn vị, lỗi đọc và hiệu chuẩn. Chúng không thay thế đo CPR, chiều motor/encoder, quãng đường và đáp ứng PID trên xe thật.
 
-## 6. Module
-
-| Module | Trách nhiệm |
-|---|---|
-| main.cpp | Khởi tạo, lập lịch task điều khiển, xử lý I/O và phát telemetry |
-| control.cpp | Chế độ, watchdog, theo điểm, cập nhật odometry |
-| kinematics.cpp | Động học thuận/nghịch và giới hạn tốc độ bánh |
-| pid_speed.cpp | PID tốc độ ba bánh |
-| motors.cpp / encoders.cpp | Điều khiển driver và lấy mẫu encoder |
-| serial_cmd.cpp / net_server.cpp | Lệnh Serial, HTTP, WebSocket |
+Kiểm thử motor/encoder bằng nguồn thật đã xác nhận dấu `ENC_SIGN={-1,-1,-1}`. Xem [kết quả chạy hai chiều và watchdog](docs/ENCODER_BENCH_2026-11-16.md). Chế độ T không xác nhận CPR và không mở khóa điều khiển quỹ đạo.

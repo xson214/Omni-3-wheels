@@ -1,8 +1,8 @@
 #pragma once
 
 // SoftAP defaults for lab use (no home WiFi required).
-#define WIFI_AP_SSID       "OmniCar"
-#define WIFI_AP_PASSWORD   "omnicar123"
+#define WIFI_AP_SSID       "OMNI3_ESP32S3"
+#define WIFI_AP_PASSWORD   "OmniRobot123"
 #define WIFI_AP_CHANNEL    1
 #define WIFI_AP_MAX_CONN   4
 

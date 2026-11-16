@@ -7,6 +7,13 @@
 static portMUX_TYPE g_ticks_mux = portMUX_INITIALIZER_UNLOCKED;
 static int64_t g_ticks[3] = {0, 0, 0};
 static int64_t g_previous[3] = {0, 0, 0};
+static float g_cpr[3] = {TICKS_PER_WHEEL_REV, TICKS_PER_WHEEL_REV, TICKS_PER_WHEEL_REV};
+
+// Called under the control mutex, shared with encoders_sample.
+void encoders_set_cpr(const float cpr[3]) {
+  for (int i = 0; i < 3; ++i) g_cpr[i] = cpr[i];
+  encoders_get_raw_counts(g_previous);
+}
 
 static void IRAM_ATTR enc_isr_generic(int idx) {
   int step = digitalRead(ENC_B_PINS[idx]) ? 1 : -1;
@@ -41,8 +48,8 @@ void encoders_sample(float vit_tps[3], float omega_rad_s[3], float dt_s) {
   for (int i = 0; i < 3; i++) {
     float ticks = static_cast<float>(counts[i] - g_previous[i]);
     g_previous[i] = counts[i];
-    float signed_tps = ENC_SIGN[i] * ticks / (dt_s * TICKS_PER_WHEEL_REV);
-    vit_tps[i] = fabsf(signed_tps);
+    float signed_tps = ENC_SIGN[i] * ticks / (dt_s * g_cpr[i]);
+    vit_tps[i] = signed_tps;
     omega_rad_s[i] = signed_tps * (2.0f * PI);
   }
 }

@@ -1,6 +1,7 @@
 #include "serial_cmd.h"
 #include "control.h"
 #include "encoders.h"
+#include "imu.h"
 
 #include <Arduino.h>
 #include <ctype.h>
@@ -41,15 +42,39 @@ static void handle_line(const char* line) {
       Serial.println(F("ERR invalid motion command"));
       return;
     }
-    if (cmd == 'V') control_set_velocity_global(a, b, c);
-    if (cmd == 'B') control_set_velocity_body(a, b, c);
-    if (cmd == 'P') control_set_pose_target(a, b, c * (PI / 180.0f));
-    Serial.printf("OK %c\n", cmd);
+    bool accepted = false;
+    if (cmd == 'V') accepted = control_set_velocity_global(a, b, c);
+    if (cmd == 'B') accepted = control_set_velocity_body(a, b, c);
+    if (cmd == 'P') accepted = control_set_pose_target(a, b, c * (PI / 180.0f));
+    Serial.printf("%s %c\n", accepted ? "OK" : "ERR calibration required", cmd);
+    return;
+  }
+
+  if (cmd == 'C') {
+    float a, b, c;
+    bool accepted = read_values(line, a, b, c) && control_set_encoder_cpr(a, b, c);
+    Serial.println(accepted ? F("OK CPR (RAM only)") : F("ERR CPR: three measured counts/rev, while stopped"));
+    return;
+  }
+
+  if (cmd == 'T') {
+    float wheel, pwm, duration;
+    bool valid = read_values(line, wheel, pwm, duration) &&
+        wheel >= 1 && wheel <= 3 && floorf(wheel) == wheel &&
+        pwm >= -MOTOR_TEST_PWM_MAX && pwm <= MOTOR_TEST_PWM_MAX && floorf(pwm) == pwm &&
+        duration >= 50 && duration <= MOTOR_TEST_DURATION_MAX_MS && floorf(duration) == duration;
+    bool accepted = valid && control_test_motor(static_cast<int>(wheel) - 1, static_cast<int>(pwm),
+                                                static_cast<uint32_t>(duration));
+    Serial.println(accepted ? F("OK T") : F("ERR T: STOP first; wheel 1..3, PWM +/-1..160, time 50..1500ms"));
     return;
   }
 
   while (isspace(static_cast<unsigned char>(*line))) line++;
-  if (*line == 0 && cmd == 'S') {
+  if (*line == 0 && cmd == 'H') {
+    Serial.println(control_test_heartbeat() ? F("OK H") : F("ERR H: no active test"));
+  } else if (*line == 0 && cmd == 'Z') {
+    Serial.println(control_reset_odometry() ? F("OK origin") : F("ERR stop before reset"));
+  } else if (*line == 0 && cmd == 'S') {
     control_command_stop();
     Serial.println(F("OK S"));
   } else if (*line == 0 && cmd == '?') {
@@ -62,6 +87,13 @@ static void handle_line(const char* line) {
                   p.x, p.y, p.theta * (180.0f / PI), w[0], w[1], w[2],
                   static_cast<long long>(counts[0]), static_cast<long long>(counts[1]),
                   static_cast<long long>(counts[2]));
+    Serial.printf("distance,%.4f,error,%.4f,imu,%d,imu_cal,%d,enc_cal,%d,gyro,%.5f,fault,%s\n",
+                  snapshot.distance_m, snapshot.target_error_m, snapshot.imu_healthy,
+                  snapshot.imu_calibrated, snapshot.encoder_calibrated,
+                  snapshot.gyro_z_rad_s, snapshot.fault);
+    Serial.printf("imu_id,0x%02X,yaw_sign,%d,imu_init,%s\n",
+                  imu_identity(), imu_yaw_sign(), imu_init_status());
+    Serial.printf("state,%d,mode,%d\n", static_cast<int>(snapshot.state), static_cast<int>(snapshot.mode));
   } else {
     Serial.println(F("ERR unknown command"));
   }

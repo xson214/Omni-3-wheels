@@ -9,6 +9,7 @@ enum ControlMode {
   MODE_VELOCITY_GLOBAL = 3,
   MODE_VELOCITY_BODY = 4,
   MODE_POSE = 5,
+  MODE_MOTOR_TEST = 6,
 };
 
 enum RunState {
@@ -36,6 +37,14 @@ struct ControlSnapshot {
   int traj_index;
   int traj_count;
   float omega_meas[3];
+  float distance_m;
+  bool imu_healthy;
+  bool imu_calibrated;
+  bool encoder_calibrated;
+  float gyro_z_rad_s;
+  float target_error_m;
+  float cpr[3];
+  const char* fault;
 };
 
 enum class TrajectoryResult { Ok, Invalid, Busy };
@@ -50,9 +59,15 @@ bool control_command_pause(void);
 bool control_command_resume(void);
 
 bool control_set_joystick(float x, float y);
-void control_set_velocity_global(float vx, float vy, float w);
-void control_set_velocity_body(float vx, float vy, float w);
-void control_set_pose_target(float x, float y, float yaw_rad);
+bool control_set_velocity_global(float vx, float vy, float w);
+bool control_set_velocity_body(float vx, float vy, float w);
+bool control_set_pose_target(float x, float y, float yaw_rad);
+bool control_set_encoder_cpr(float a, float b, float c);
+bool control_reset_odometry(void);
+bool control_recalibrate_imu(void);
+// Bench test only: one wheel, bounded PWM/time, independent of unknown CPR.
+bool control_test_motor(int wheel, int signed_pwm, uint32_t duration_ms);
+bool control_test_heartbeat(void);
 
 TrajectoryResult control_set_trajectory(const TrajPoint* pts, int n);
 int control_get_trajectory(TrajPoint* pts, int max_n);

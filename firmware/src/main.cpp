@@ -6,6 +6,7 @@
 #include "control.h"
 #include "serial_cmd.h"
 #include "net_server.h"
+#include "imu.h"
 
 static bool g_ready = false;
 
@@ -54,6 +55,9 @@ void setup() {
   encoders_init();
   control_init();
   serial_cmd_init();
+  Serial.println(F("Keep robot stationary: MPU calibration (~3.3 s)"));
+  Serial.printf("MPU calibration: %s\n", imu_init() ? "OK" : "FAILED (AUTO unavailable)");
+  Serial.printf("MPU WHO_AM_I=0x%02X, sign=%d, %s\n", imu_identity(), imu_yaw_sign(), imu_init_status());
 
   BaseType_t core = xPortGetCoreID();
   if (xTaskCreatePinnedToCore(control_task, "omni-control", 4096, nullptr, 3, nullptr, core) != pdPASS) {
@@ -65,7 +69,7 @@ void setup() {
   }
 
   g_ready = true;
-  Serial.println(F("Ready. Serial: V/B/P/S/?"));
+  Serial.println(F("Ready. Serial: V/B/P/S/C/Z/?"));
 }
 
 void loop() {

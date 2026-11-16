@@ -24,6 +24,7 @@ void set_motor(int idx, int pwm, int dir) {
   if (idx < 0 || idx > 2) return;
   if (pwm < 0) pwm = 0;
   if (pwm > PWM_MAX) pwm = PWM_MAX;
+  dir *= MOTOR_SIGN[idx];
 
   if (dir > 0) {
     digitalWrite(IN1_PINS[idx], HIGH);
