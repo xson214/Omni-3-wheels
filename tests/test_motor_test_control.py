@@ -62,7 +62,8 @@ void encoders_sample(float tps[3], float omega[3], float dt) {
   assert(dt > 0);
   for (int i = 0; i < 3; ++i) tps[i] = omega[i] = 0;
 }
-ImuSample imu_read() { return {true, true, 0, 0, 0, 9.80665f}; }
+static bool imu_healthy = true;
+ImuSample imu_read() { return {imu_healthy, true, 0, 0, 0, 9.80665f}; }
 bool imu_init() { return true; }
 static void expect_stopped() {
   assert(output[0] == 0 && output[1] == 0 && output[2] == 0);
@@ -164,6 +165,9 @@ int main() {
   step(101, CONTROL_MAX_DT_S + 0.001f);
   expect_stopped();
   assert(std::strstr(control_get_snapshot().fault, "overrun"));
+  assert(control_get_snapshot().loop_overruns == 1);
+  assert(control_get_snapshot().loop_dt_ms > CONTROL_MAX_DT_S * 1000);
+  assert(control_get_snapshot().loop_max_dt_ms >= control_get_snapshot().loop_dt_ms);
   assert(!control_test_heartbeat());
   reset_stopped();
 
@@ -199,6 +203,26 @@ int main() {
   step(10);
   expect_stopped();
   assert(control_get_snapshot().imu_calibrated);
+  assert(control_set_encoder_cpr(2028,2028,2028));
+  assert(control_set_mode(MODE_AUTO));
+  assert(control_command_start());
+  imu_healthy = false;
+  step(10); step(10);
+  assert(control_get_snapshot().state == STATE_RUNNING);
+  imu_healthy = true; step(10);
+  assert(control_get_snapshot().state == STATE_RUNNING);
+  imu_healthy = false;
+  for(int i=0;i<6;++i) step(10);
+  assert(control_get_snapshot().state == STATE_IDLE);
+  imu_healthy = true; step(10);
+  assert(control_get_snapshot().state == STATE_IDLE); // No automatic restart.
+  assert(control_set_mode(MODE_MANUAL));
+  assert(control_command_start());
+  assert(control_set_joystick(.1f,0));
+  step(350);
+  assert(control_get_snapshot().state == STATE_RUNNING);
+  step(150);
+  assert(control_get_snapshot().state == STATE_IDLE);
   std::cout << "PASS bounded motor diagnostics: limits, isolation, deadlines, heartbeat, STOP, overrun, wrap, calibration gates\n";
 }
 '''

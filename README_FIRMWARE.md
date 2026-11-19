@@ -79,12 +79,12 @@ Không tích phân kép gia tốc thành vị trí. Chưa sử dụng magnetomet
 
 | Chế độ | Hoạt động / điều kiện dừng |
 |---|---|
-| MANUAL | START rồi giữ hướng; quá 300 ms không cập nhật joystick đang chuyển động thì dừng |
+| MANUAL | START rồi giữ hướng; quá 500 ms không cập nhật joystick đang chuyển động thì dừng |
 | AUTO | Nạp điểm, chọn AUTO, START; dừng khi xong, lỗi MPU, timeout hoặc nhận STOP |
 | V / B / P | Làm mới lệnh trong dưới 200 ms; quá hạn thì dừng |
 | PAUSE / RESUME | Tạm dừng motor; tiếp tục đoạn AUTO đang theo |
 
-Ngắt WebSocket của máy đang điều khiển sẽ dừng xe, kể cả AUTO. Ping/pong phát hiện mất kết nối im lặng sau vài giây; mất joystick MANUAL vẫn có watchdog 300 ms. Máy chỉ theo dõi ngắt kết nối không ảnh hưởng. Chu kỳ điều khiển vượt 100 ms dừng và báo lỗi. STOP luôn đưa về STOP/IDLE.
+Ngắt WebSocket của máy đang điều khiển sẽ dừng xe, kể cả AUTO. Ping/pong phát hiện mất kết nối im lặng sau vài giây; mất joystick MANUAL vẫn có watchdog 500 ms. Máy chỉ theo dõi ngắt kết nối không ảnh hưởng. Chu kỳ điều khiển vượt 100 ms dừng và báo lỗi. STOP luôn đưa về STOP/IDLE.
 
 HTTP: `GET /` trang điều khiển, `GET /status` trạng thái và ticks, `GET/POST /trajectory` đọc/nạp `{points:[{x,y},...]}`. WebSocket giữ các kiểu `mode`, `command`, `joystick`; bổ sung `{type:"calibration",cpr:[n1,n2,n3]}` và lệnh `RESET_ODOMETRY`. Telemetry có `distance_m`, `target_error_m`, `imu_healthy`, `imu_calibrated`, `encoder_calibrated`, `cpr`, `ticks`, `fault`.
 
@@ -113,3 +113,7 @@ pio run -d firmware
 Kiểm thử host biên dịch module C++ thật: ví dụ trong slide, đổi hệ tọa độ, giới hạn tốc độ, PID có dấu, anti-windup, bám đoạn với mô hình trễ/nhiễu. Kiểm thử MPU dùng I2C giả để kiểm tra đơn vị, lỗi đọc và hiệu chuẩn. Chúng không thay thế đo CPR, chiều motor/encoder, quãng đường và đáp ứng PID trên xe thật.
 
 Kiểm thử motor/encoder bằng nguồn thật đã xác nhận dấu `ENC_SIGN={-1,-1,-1}`. Xem [kết quả chạy hai chiều và watchdog](docs/ENCODER_BENCH_2026-11-16.md). Chế độ T không xác nhận CPR và không mở khóa điều khiển quỹ đạo.
+
+Cập nhật xử lý gián đoạn: joystick watchdog 500 ms; cầu nối trình duyệt chấp nhận gói mới dưới 300 ms và nhả giữ khi không có input 350 ms. MPU thiếu mẫu ngắn tạm dùng tốc độ góc encoder; mất mẫu liên tục khoảng 50 ms hoặc mất hiệu chuẩn thì dừng AUTO/POSE, không tự khởi động lại. Chưa xác định nguyên nhân vật lý của các lần mất mẫu trên xe.
+
+Trên S3 hai lõi, tác vụ điều khiển chạy lõi 1, HTTP/WebSocket chạy lõi 0 để giảm tranh chấp thời gian CPU. Ngưỡng `Control loop overrun` vẫn là 100 ms: phát hiện quá hạn thì cắt PWM trước khi đọc MPU và bỏ khoảng odometry không đáng tin cậy. Telemetry có `loop_dt_ms`, `loop_max_dt_ms`, `loop_overruns` (tính từ khởi động) để kiểm chứng thời gian thực trên xe. Bản sửa đã biên dịch và kiểm thử host; cần nạp qua USB và đo lại dưới tải mạng trước khi kết luận đã hết lỗi trên phần cứng.

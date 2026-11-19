@@ -23,7 +23,7 @@ The ESP32 starts the **OMNI3_ESP32S3** Wi-Fi access point with password **OmniRo
 5. Khi xe đứng yên ở vị trí xuất phát, bấm **Đặt gốc odometry**. Kiểm tra encoder đã xác nhận và MPU sẵn sàng trước khi chạy AUTO.
 6. Chọn **MANUAL → Chọn chế độ → START**, giữ một nút hướng để di chuyển, nhả nút để dừng. Hoặc nhập quỹ đạo theo mét, **Nạp quỹ đạo → AUTO → Chọn chế độ → START**.
 
-**STOP** kết thúc chuyển động. Khi WebSocket của máy đang điều khiển bị ngắt, firmware dừng cả MANUAL và AUTO; kết nối lại phải chọn chế độ và START lại. MANUAL còn có watchdog joystick 300 ms. Mất mạng không gửi khung đóng được phát hiện bằng ping/pong WebSocket, nên AUTO có thể mất vài giây mới phát hiện.
+**STOP** kết thúc chuyển động. Khi WebSocket của máy đang điều khiển bị ngắt, firmware dừng cả MANUAL và AUTO; kết nối lại phải chọn chế độ và START lại. MANUAL còn có watchdog joystick 500 ms. Mất mạng không gửi khung đóng được phát hiện bằng ping/pong WebSocket, nên AUTO có thể mất vài giây mới phát hiện.
 
 Trạng thái cũng có tại [http://192.168.4.1/status](http://192.168.4.1/status). Đây là số đo/ước lượng từ encoder và gyro, không phải đo vị trí tuyệt đối.
 
@@ -47,7 +47,7 @@ Open the **Local URL** printed by Streamlit. Enter the ESP32 IP in the sidebar. 
 3. Hold and drag on the pad to drive. **x** commands body-frame **vx**, **y** commands **vy**, and yaw rate is zero. Releasing the pad sends a zero command and leaves MANUAL ready for another hold.
 4. Press **STOP** to end the run. Check for **STOP / IDLE**. Select MANUAL and press START again before driving.
 
-If the ESP32 misses the joystick heartbeat for 300 ms during motion, it stops and requires START before accepting another drive command. After **PAUSE** and **RESUME**, start a fresh hold on the pad.
+If the ESP32 misses the joystick heartbeat for 500 ms during motion, it stops and requires START before accepting another drive command. After **PAUSE** and **RESUME**, start a fresh hold on the pad.
 
 ## 4. Follow a trajectory in AUTO
 
@@ -90,3 +90,5 @@ While IDLE, confirm measured encoder counts with `{"type":"calibration","cpr":[N
 ~~~json
 {"type":"trajectory","points":[{"x":0.0,"y":0.0},{"x":0.5,"y":0.0}]}
 ~~~
+
+Cập nhật xử lý gián đoạn: joystick watchdog 500 ms; cầu nối trình duyệt chấp nhận gói mới dưới 300 ms và nhả giữ khi không có input 350 ms. MPU thiếu mẫu ngắn tạm dùng tốc độ góc encoder; mất mẫu liên tục khoảng 50 ms hoặc mất hiệu chuẩn thì dừng AUTO/POSE, không tự khởi động lại. Chưa xác định nguyên nhân vật lý của các lần mất mẫu trên xe.

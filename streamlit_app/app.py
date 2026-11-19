@@ -188,7 +188,7 @@ class EspBridge:
             last_input = time.monotonic()
             while self._active():
                 try:
-                    message = connection.recv(timeout=0.25)
+                    message = connection.recv(timeout=0.35)
                 except TimeoutError:
                     # No synthetic zero here: the firmware watchdog disarms on link loss.
                     with self._send_lock:
@@ -218,11 +218,11 @@ class EspBridge:
                         continue
 
                     x, y, sent_at = data.get("x"), data.get("y"), data.get("sentAt")
-                    fresh = type(sent_at) in (int, float) and 0 <= time.time() * 1000 - sent_at < 200
+                    fresh = type(sent_at) in (int, float) and 0 <= time.time() * 1000 - sent_at < 300
                     valid_axes = all(type(axis) in (int, float) and -1 <= axis <= 1 for axis in (x, y))
                     if kind not in ("press", "move") or not fresh or not valid_axes:
                         continue
-                    if now - last_input > 0.25:
+                    if now - last_input > 0.35:
                         self._holding = False
                     if kind == "press":
                         self._holding = armed

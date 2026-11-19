@@ -63,7 +63,8 @@ static constexpr int MOTOR_SIGN[3] = {1, 1, 1};
 
 #define SERIAL_BAUD                   115200
 #define CMD_WATCHDOG_MS               200
-#define JOYSTICK_TIMEOUT_MS           300
+#define JOYSTICK_TIMEOUT_MS           500
+#define IMU_GAP_MAX_S                 0.05f
 #define TELEMETRY_PERIOD_MS           50
 #define MOTOR_TEST_PWM_MAX            160
 #define MOTOR_TEST_DURATION_MAX_MS    1500

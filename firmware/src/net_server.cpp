@@ -184,6 +184,9 @@ static void fill_snapshot(JsonDocument& doc, const ControlSnapshot& snapshot) {
   doc["distance_m"] = snapshot.distance_m;
   doc["imu_healthy"] = snapshot.imu_healthy;
   doc["imu_calibrated"] = snapshot.imu_calibrated;
+  doc["loop_dt_ms"] = snapshot.loop_dt_ms;
+  doc["loop_max_dt_ms"] = snapshot.loop_max_dt_ms;
+  doc["loop_overruns"] = snapshot.loop_overruns;
   doc["imu_init"] = imu_init_status();
   doc["imu_id"] = imu_identity();
   doc["imu_yaw_sign"] = imu_yaw_sign();

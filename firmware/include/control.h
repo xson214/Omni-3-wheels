@@ -45,6 +45,9 @@ struct ControlSnapshot {
   float target_error_m;
   float cpr[3];
   const char* fault;
+  float loop_dt_ms;
+  float loop_max_dt_ms;
+  uint32_t loop_overruns;
 };
 
 enum class TrajectoryResult { Ok, Invalid, Busy };

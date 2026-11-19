@@ -29,6 +29,9 @@ static float g_omega_meas[3] = {0, 0, 0};
 static float g_speed = 0.0f;
 static float g_vx = 0, g_vy = 0, g_wz = 0, g_distance = 0;
 static ImuSample g_imu = {};
+static float g_imu_gap_s = 0;
+static float g_loop_dt_ms = 0, g_loop_max_dt_ms = 0;
+static uint32_t g_loop_overruns = 0;
 static bool g_imu_recalibrate = false, g_imu_busy = false, g_skip_after_calibration = false;
 static bool g_encoder_calibrated = ENCODER_CALIBRATED_DEFAULT;
 static float g_cpr[3] = {TICKS_PER_WHEEL_REV, TICKS_PER_WHEEL_REV, TICKS_PER_WHEEL_REV};
@@ -86,7 +89,8 @@ ControlSnapshot control_get_snapshot(void) {
   return {g_pose, g_speed, g_mode, g_state, g_traj_i, g_traj_n,
           {g_omega_meas[0], g_omega_meas[1], g_omega_meas[2]},
           g_distance, g_imu.healthy, g_imu.calibrated, g_encoder_calibrated,
-          g_imu.gyro_z_rad_s, g_target_error, {g_cpr[0], g_cpr[1], g_cpr[2]}, g_fault};
+          g_imu.gyro_z_rad_s, g_target_error, {g_cpr[0], g_cpr[1], g_cpr[2]}, g_fault,
+          g_loop_dt_ms, g_loop_max_dt_ms, g_loop_overruns};
 }
 
 bool control_set_mode(ControlMode mode) {
@@ -334,6 +338,18 @@ void control_loop(float dt_s) {
     return; // Discard the long calibration interval; preserve the pose origin.
   }
   // Only this task accesses the I2C driver. Do not block the command mutex on I2C.
+  {
+    ControlLock lock;
+    g_loop_dt_ms = dt_s * 1000;
+    g_loop_max_dt_ms = fmaxf(g_loop_max_dt_ms, g_loop_dt_ms);
+    if (dt_s > CONTROL_MAX_DT_S) {
+      ++g_loop_overruns;
+      g_fault = "Control loop overrun";
+      set_idle(); // Cut PWM before any I2C transaction following a missed deadline.
+      encoders_set_cpr(g_cpr);
+      return;
+    }
+  }
   ImuSample sample = imu_read();
   ControlLock lock;
   g_imu = sample;
@@ -342,6 +358,7 @@ void control_loop(float dt_s) {
   float unused_x, unused_y, encoder_wz;
   fwdkin(g_omega_meas, 0, &unused_x, &unused_y, &encoder_wz);
   bool usable_imu = sample.healthy && sample.calibrated;
+  g_imu_gap_s = usable_imu ? 0 : g_imu_gap_s + dt_s;
   g_wz = usable_imu ? IMU_GYRO_WEIGHT * sample.gyro_z_rad_s + (1 - IMU_GYRO_WEIGHT) * encoder_wz : encoder_wz;
   // Midpoint heading improves integration while translating and turning together.
   float mid_yaw = wrap_pi(g_pose.theta + 0.5f * dt_s * g_wz);
@@ -351,7 +368,6 @@ void control_loop(float dt_s) {
   g_pose.theta = wrap_pi(g_pose.theta + dt_s * g_wz);
   g_speed = hypotf(g_vx, g_vy);
   g_distance += g_speed * dt_s;
-  if (dt_s > CONTROL_MAX_DT_S) { g_fault = "Control loop overrun"; set_idle(); return; }
   if (g_state == STATE_RUNNING) {
     if (g_mode == MODE_MOTOR_TEST) {
       uint32_t now = millis();
@@ -363,8 +379,9 @@ void control_loop(float dt_s) {
       }
       return;
     }
-    if ((g_mode == MODE_AUTO || g_mode == MODE_POSE) && !usable_imu) {
-      g_fault = "IMU sample lost: stopped trajectory"; set_idle(); return;
+    if ((g_mode == MODE_AUTO || g_mode == MODE_POSE) &&
+        (!sample.calibrated || g_imu_gap_s >= IMU_GAP_MAX_S)) {
+      g_fault = "IMU unavailable for 50 ms or uncalibrated: stopped trajectory"; set_idle(); return;
     }
     float omega_ref[3] = {0, 0, 0};
     compute_reference(omega_ref, dt_s);

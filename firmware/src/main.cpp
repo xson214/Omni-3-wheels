@@ -59,12 +59,14 @@ void setup() {
   Serial.printf("MPU calibration: %s\n", imu_init() ? "OK" : "FAILED (AUTO unavailable)");
   Serial.printf("MPU WHO_AM_I=0x%02X, sign=%d, %s\n", imu_identity(), imu_yaw_sign(), imu_init_status());
 
-  BaseType_t core = xPortGetCoreID();
-  if (xTaskCreatePinnedToCore(control_task, "omni-control", 4096, nullptr, 3, nullptr, core) != pdPASS) {
+  // Keep socket/HTTP work away from the time-critical motor task on dual-core S3.
+  const BaseType_t control_core = portNUM_PROCESSORS > 1 ? 1 : 0;
+  const BaseType_t network_core = 0;
+  if (xTaskCreatePinnedToCore(control_task, "omni-control", 4096, nullptr, 3, nullptr, control_core) != pdPASS) {
     Serial.println(F("ERR control task unavailable"));
     return;
   }
-  if (xTaskCreatePinnedToCore(network_task, "omni-network", 8192, nullptr, 2, nullptr, core) != pdPASS) {
+  if (xTaskCreatePinnedToCore(network_task, "omni-network", 8192, nullptr, 2, nullptr, network_core) != pdPASS) {
     Serial.println(F("ERR network task unavailable"));
   }
 
